@@ -281,6 +281,8 @@ def create_datasets(train_config: dict, overfit_mode: bool = False, overfit_num:
         strict_tokens=data_config.get('strict_tokens', True),
         transform=None  # Uses deterministic transforms by default
     )
+
+    # assert train_dataset.apply_augmentation == True and val_dataset.apply_augmentation == True, "Datasets should apply augmentations by default"
     
     # Overfit mode: use small subset
     if overfit_mode:

@@ -222,7 +222,7 @@ class TokenConditionedMaskDataset(Dataset):
         self.samples = self._load_metadata()
 
         # Augmentation: keep interface unchanged, enable automatically for train split
-        self.apply_augmentation = (self.split == "train")
+        self.apply_augmentation = True
         self._load_augmentation_config()
         
         # Build transform
@@ -416,6 +416,8 @@ class TokenConditionedMaskDataset(Dataset):
     def _augment_coarse_mask_only(self, coarse_mask: np.ndarray) -> np.ndarray:
         """Apply coarse-mask-only augmentation in numpy space."""
         mask = coarse_mask.copy()
+
+        # print("Wohoo applying augmentation to coarse mask!")
 
         if self.rng.random() < self.erode_prob:
             k = self._rand_odd(*self.erode_kernel_range)
