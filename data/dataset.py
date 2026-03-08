@@ -114,7 +114,7 @@ class SurgicalMaskRefinementDataset(Dataset):
         self.drop_parts_count_range = tuple(aug_config.get("drop_parts_count_range", [1, 3]))
         self.drop_parts_radius_range = tuple(aug_config.get("drop_parts_radius_range", [6, 18]))
         self.cutout_count_range = tuple(aug_config.get("cutout_count_range", [1, 3]))
-        
+        self.cutout_size_range = tuple(aug_config.get("cutout_size_range", [8, 40]))
 
         self.rng = random.Random()
         

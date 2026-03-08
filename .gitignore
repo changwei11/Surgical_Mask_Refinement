@@ -54,6 +54,7 @@ checkpoints/
 !/checkpoints/**/*.ckpt
 
 # Training outputs
+dataset/
 outputs/
 logs/
 wandb/

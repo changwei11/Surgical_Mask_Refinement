@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from tooltipnet import ToolTipNet
+from utils.tooltipnet import ToolTipNet
 from kornia.feature import SOLD2
 
 
