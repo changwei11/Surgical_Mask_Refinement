@@ -4,7 +4,7 @@
 # vae_checkpoint: "/workspace/ece285/outputs/vae/checkpoints/best.pt"
 # diffusion_checkpoint: "/workspace/ece285/outputs/diffusion_rgb/checkpoints/best.pt"
 vae_checkpoint: "outputs/vae/checkpoints/best.pt"
-diffusion_checkpoint: "outputs/diffusion_rgb/checkpoints/best.pt"
+diffusion_checkpoint: "outputs/diffusion_rgb/checkpoints/epoch_0500.pt"
 
 # Model configs
 vae_config: "configs/model/vae.yaml"

@@ -15,8 +15,8 @@ set -euo pipefail
 # Configuration Variables (Edit these as needed)
 # ==============================================================================
 
-SESSION_NAME="rgb_conditioned_diffusion"
-PROJECT_ROOT="/workspace/ece285"
+SESSION_NAME="rgb_conditioned_diffusion_augmented_pl"
+PROJECT_ROOT="/workspace/Surgical_Mask_Refinement"
 TRAIN_CONFIG="configs/train/diffusion_rgb_train.yaml"
 VAE_CONFIG="configs/model/vae.yaml"
 DIFFUSION_CONFIG="configs/model/diffusion_rgb.yaml"

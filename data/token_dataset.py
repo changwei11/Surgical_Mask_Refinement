@@ -205,6 +205,7 @@ class TokenConditionedMaskDataset(Dataset):
         load_spatial_map: bool = False,
         return_paths: bool = False,
         strict_tokens: bool = True,
+        apply_augmentation: bool = True,  # currently always enabled for train split
         transform=None
     ):
         super().__init__()
@@ -222,7 +223,7 @@ class TokenConditionedMaskDataset(Dataset):
         self.samples = self._load_metadata()
 
         # Augmentation: keep interface unchanged, enable automatically for train split
-        self.apply_augmentation = True
+        self.apply_augmentation = apply_augmentation
         self._load_augmentation_config()
         
         # Build transform
@@ -294,7 +295,12 @@ class TokenConditionedMaskDataset(Dataset):
         self.cutout_count_range = tuple(aug_config.get("cutout_count_range", defaults["cutout_count_range"]))
         self.cutout_size_range = tuple(aug_config.get("cutout_size_range", defaults["cutout_size_range"]))
 
-        self.rng = random.Random()
+        self.seed = aug_config.get("seed", None)
+
+        if self.seed is not None:
+            self.rng = random.Random(self.seed)  # fixed seed for reproducibility of augmentations
+        else:
+            self.rng = random.Random()  # non-deterministic augmentations
 
     def _load_metadata(self) -> List[Dict]:
         """Load and filter metadata from split file."""

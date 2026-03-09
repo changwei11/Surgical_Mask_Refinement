@@ -33,6 +33,7 @@ from models.diffusion import (
     RGBConditionedLatentDiffusionUNet,
 )
 from utils.metrics import dice_score, iou_score
+from utils.perceptual_loss import ToolTipFeaturePerceptionLoss, SOLD2FeaturePerceptionLoss
 
 
 def parse_args():
@@ -202,7 +203,7 @@ def _sample_refined_latent_ddim(
     return z_t
 
 
-def _save_sample_figure(rgb, coarse, pred, gt, out_path: Path, sample_id: str, dice: float, iou: float):
+def _save_sample_figure(rgb, coarse, pred, gt, out_path: Path, sample_id: str, dice: float, iou: float, coarse_tooltip_loss: float, refined_tooltip_loss: float, coarse_sold2_loss: float, refined_sold2_loss: float):
     fig, axes = plt.subplots(1, 4, figsize=(14, 4))
 
     if rgb is not None:
@@ -212,10 +213,10 @@ def _save_sample_figure(rgb, coarse, pred, gt, out_path: Path, sample_id: str, d
         axes[0].axis("off")
 
     axes[1].imshow(coarse, cmap="gray", vmin=0, vmax=1)
-    axes[1].set_title("Coarse")
+    axes[1].set_title(f"Coarse\nToolTip={coarse_tooltip_loss:.4f}, SOLD2={coarse_sold2_loss:.4f}")
 
     axes[2].imshow(pred, cmap="gray", vmin=0, vmax=1)
-    axes[2].set_title(f"Prediction\nDice={dice:.4f}, IoU={iou:.4f}")
+    axes[2].set_title(f"Prediction\nToolTip={refined_tooltip_loss:.4f}, SOLD2={refined_sold2_loss:.4f}")
 
     axes[3].imshow(gt, cmap="gray", vmin=0, vmax=1)
     axes[3].set_title("GT Refined")
@@ -239,16 +240,58 @@ def _to_vis_rgb(rgb_tensor: torch.Tensor) -> np.ndarray:
     return rgb_np
 
 
+def _compute_batch_score(criterion, pred: torch.Tensor, gt: torch.Tensor) -> torch.Tensor:
+    """
+    Compute perceptual loss for a batch of predictions and ground truths.
+
+    Args:
+        criterion: Perceptual loss module (e.g. ToolTipFeaturePerceptionLoss)
+        pred: Tensor of shape [B,1,H,W] with binary predictions
+        gt: Tensor of shape [B,1,H,W] with binary ground truths
+    Returns:
+        Tensor of shape [B] with loss values for each sample in the batch
+    """
+    batch_size = pred.shape[0]
+    losses = []
+    for i in range(batch_size):
+        loss = criterion(pred[i:i+1], gt[i:i+1])[0]
+        losses.append(loss)
+    return torch.stack(losses).squeeze()
+
+
 def main():
     args = parse_args()
+
+    config = _load_yaml(args.config)
+    inference_cfg = config.get("inference", {})
+
+    device = _resolve_device(args.device or config.get("device", "cuda"))
+
+    tooltip_criterion = ToolTipFeaturePerceptionLoss(
+        checkpoint_path="./checkpoints/tooltipnet.pth",
+        detector_mask_size=224,
+        use_attention=False,
+        feature_weights={
+            "c2": 0.,
+            "c3": 0.,
+            "c4": 0.,
+            "c5": 0.,
+            "fpn_feat": 1.0,
+        },
+        loss_type="l2",
+    ).to(device)
+
+    # SOLD2
+    sold2_criterion = SOLD2FeaturePerceptionLoss(
+        pretrained=True,
+        input_size=(224, 224),
+        loss_type="l2",
+    ).to(device)
 
     print("=" * 60)
     print("RGB-CONDITIONED LATENT DIFFUSION INFERENCE")
     print("=" * 60)
     print(f"Config: {args.config}")
-
-    config = _load_yaml(args.config)
-    inference_cfg = config.get("inference", {})
 
     vae_ckpt = args.vae_checkpoint or config["vae_checkpoint"]
     diff_ckpt = args.diffusion_checkpoint or config["diffusion_checkpoint"]
@@ -256,8 +299,6 @@ def main():
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "predictions").mkdir(exist_ok=True)
     (output_dir / "visualizations").mkdir(exist_ok=True)
-
-    device = _resolve_device(args.device or config.get("device", "cuda"))
 
     vae_interface, model, scheduler = _build_components(config, vae_ckpt, diff_ckpt, device)
 
@@ -277,6 +318,7 @@ def main():
         load_spatial_map=False,
         return_paths=True,
         strict_tokens=strict_tokens,
+        apply_augmentation=True,  # no augmentation during inference
         transform=None,  # keep deterministic, matching validation/test style
     )
 
@@ -295,6 +337,8 @@ def main():
 
     all_dice: List[float] = []
     all_iou: List[float] = []
+    all_tooltip_losses: List[float] = []
+    all_sold2_losses: List[float] = []
     saved_visualizations = 0
 
     for batch in loader:
@@ -319,37 +363,58 @@ def main():
 
         batch_dice = dice_score(pred_probs, refined_mask, threshold=threshold).detach().cpu().tolist()
         batch_iou = iou_score(pred_probs, refined_mask, threshold=threshold).detach().cpu().tolist()
+        batch_coarse_tooltip_loss = _compute_batch_score(tooltip_criterion, coarse_mask, refined_mask).detach().cpu().tolist()
+        batch_coarse_sold2_loss = _compute_batch_score(sold2_criterion, coarse_mask, refined_mask).detach().cpu().tolist()
+        batch_tooltip_loss = _compute_batch_score(tooltip_criterion, pred_binary, refined_mask).detach().cpu().tolist()
+        batch_sold2_loss = _compute_batch_score(sold2_criterion, pred_binary, refined_mask).detach().cpu().tolist()
         all_dice.extend(batch_dice)
         all_iou.extend(batch_iou)
+        all_tooltip_losses.extend(batch_tooltip_loss)
+        all_sold2_losses.extend(batch_sold2_loss)
 
         for i in range(pred_binary.shape[0]):
             sample_id = str(batch["id"][i])
+            refined_mask_path = batch["refined_mask_path"][i]
+            rgb_path = refined_mask_path.replace("refined_mask", "RGB")
+            # print(rgb_path)
+            rgb_np = np.array(Image.open(rgb_path).convert("RGB").resize((image_size, image_size)))
 
             np_pred = (pred_binary[i, 0].detach().cpu().numpy() * 255).astype(np.uint8)
             out_path = output_dir / "predictions" / f"{sample_id}.png"
-            Image.fromarray(np_pred).save(out_path)
+
+            rgb_overlay = rgb_np.copy().astype(np.uint8)
+            mask = np_pred > 0
+            rgb_overlay[mask] = (rgb_overlay[mask] * 0.5 + np.array([0, 255, 0]) * 0.5).astype(np.uint8)
+
+            Image.fromarray(rgb_overlay).save(out_path)
 
             if saved_visualizations < args.num_visualizations:
-                # rgb_np = _to_vis_rgb(batch["rgb"][i])
-                # Read the RGB image from the original dataset for better visualization (in case of any preprocessing differences)
-                refined_mask_path = batch["refined_mask_path"][i]
-                rgb_path = refined_mask_path.replace("refined_mask", "RGB")
-                # print(rgb_path)
-                rgb_np = np.array(Image.open(rgb_path).convert("RGB").resize((image_size, image_size)))
                 coarse_np = batch["coarse_mask"][i, 0].detach().cpu().numpy()
                 gt_np = batch["refined_mask"][i, 0].detach().cpu().numpy()
                 pred_np = pred_binary[i, 0].detach().cpu().numpy()
 
+                coarse_overlay = rgb_np.copy()
+                mask = coarse_np > 0
+                coarse_overlay[mask] = (coarse_overlay[mask] * 0.5 + np.array([0, 255, 0]) * 0.5).astype(np.uint8)  # green overlay for coarse mask
+
+                refined_overlay = rgb_np.copy()
+                mask = gt_np > 0
+                refined_overlay[mask] = (refined_overlay[mask] * 0.5 + np.array([0, 255, 0]) * 0.5).astype(np.uint8)  # green overlay for refined GT
+
                 vis_path = output_dir / "visualizations" / f"{sample_id}_comparison.png"
                 _save_sample_figure(
                     rgb=rgb_np,
-                    coarse=coarse_np,
-                    pred=pred_np,
-                    gt=gt_np,
+                    coarse=coarse_overlay,
+                    pred=rgb_overlay,
+                    gt=refined_overlay,
                     out_path=vis_path,
                     sample_id=sample_id,
                     dice=batch_dice[i],
                     iou=batch_iou[i],
+                    coarse_tooltip_loss=batch_coarse_tooltip_loss[i],
+                    coarse_sold2_loss=batch_coarse_sold2_loss[i],
+                    refined_tooltip_loss=batch_tooltip_loss[i],
+                    refined_sold2_loss=batch_sold2_loss[i],
                 )
                 saved_visualizations += 1
 
@@ -364,6 +429,8 @@ def main():
         "mean_iou": float(np.mean(all_iou)) if all_iou else 0.0,
         "std_dice": float(np.std(all_dice)) if all_dice else 0.0,
         "std_iou": float(np.std(all_iou)) if all_iou else 0.0,
+        "mean_tooltip_loss": float(np.mean(all_tooltip_losses)) if all_tooltip_losses else 0.0,
+        "mean_sold2_loss": float(np.mean(all_sold2_losses)) if all_sold2_losses else 0.0,
     }
 
     with open(output_dir / "metrics_summary.json", "w", encoding="utf-8") as f:

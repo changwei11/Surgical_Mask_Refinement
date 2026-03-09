@@ -215,6 +215,7 @@ class SOLD2FeaturePerceptionLoss(nn.Module):
         stage_names=None,
         feature_weights=None,
         use_final_backbone_feature: bool = True,
+        mean: bool = True,
     ):
         super().__init__()
 
@@ -237,6 +238,7 @@ class SOLD2FeaturePerceptionLoss(nn.Module):
                 feature_weights["backbone_feature"] = 1.0
 
         self.feature_weights = feature_weights
+        self.compute_mean = mean
 
     def _prepare_mask(self, x: torch.Tensor) -> torch.Tensor:
         if x.dim() == 3:
