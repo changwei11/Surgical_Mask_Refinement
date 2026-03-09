@@ -224,26 +224,8 @@ python3 scripts/train_rgb_conditioned_diffusion.py \
 ### Step 4: Run Baseline Diffusion Inference (with optional test-time augmentation)
 
 ```bash
-python3 scripts/infer_diffusion.py \
-    --config configs/infer/diffusion_infer.yaml \
-    --metadata_dir data/metadata \
-    --split test \
-    --source all \
-    --augment_test \
-    --batch_size 4 \
-    --num_visualizations 32 \
-    --vae_checkpoint checkpoints/vae_best.pt \
-    --diffusion_checkpoint outputs/diffusion/checkpoints/best.pt \
-    --output_dir outputs/inference_test_aug
+python3 scripts/infer_diffusion.py --config configs/infer/diffusion_infer.yaml --split test --source all
 ```
-
-Outputs:
-- Uses **DDIM sampling** controlled by `configs/infer/diffusion_infer.yaml` (`num_inference_steps`, `eta`)
-- `outputs/inference_test_aug/predictions/*.png`: predicted binary refined masks
-- `outputs/inference_test_aug/visualizations/*_comparison.png`: 4-panel RGB/coarse/prediction/GT figures
-- `outputs/inference_test_aug/metrics_summary.json`: aggregate Dice/IoU on the split
-
-> If you want deterministic inference without augmentation, remove `--augment_test`.
 
 ---
 

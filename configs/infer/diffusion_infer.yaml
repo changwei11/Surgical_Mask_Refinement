@@ -1,12 +1,14 @@
 # Diffusion Inference Configuration
 
 # Model checkpoints
-vae_checkpoint: "/workspace/ece285/outputs/vae/best_model.pth"
-diffusion_checkpoint: "/workspace/ece285/outputs/diffusion/best_model.pth"
+# vae_checkpoint: "/workspace/ece285/outputs/vae/checkpoints/best.pt"
+# diffusion_checkpoint: "/workspace/ece285/outputs/diffusion_rgb/checkpoints/best.pt"
+vae_checkpoint: "outputs/vae/checkpoints/best.pt"
+diffusion_checkpoint: "outputs/diffusion_rgb/checkpoints/best.pt"
 
 # Model configs
 vae_config: "configs/model/vae.yaml"
-diffusion_config: "configs/model/diffusion.yaml"
+diffusion_config: "configs/model/diffusion_rgb.yaml"
 
 # Inference settings
 inference:
@@ -24,7 +26,7 @@ input:
   
 # Output settings
 output:
-  save_dir: "/workspace/ece285/outputs/inference"
+  save_dir: "outputs/inference"
   save_intermediates: false  # save denoising steps
   save_format: "png"
   

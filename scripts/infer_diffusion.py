@@ -1,7 +1,14 @@
-"""Inference script for generating refined masks.
+"""Inference script for RGB-conditioned latent diffusion mask refinement.
 
-Runs trained diffusion model on test data or specific samples.
-Supports optional test-time augmentation and visualization outputs.
+Runs a trained RGB-conditioned diffusion model on token-conditioned data.
+Compatible with train_rgb_conditioned_diffusion.py and
+RGBConditionedLatentDiffusionTrainer.
+
+Features:
+- Loads frozen VAE + RGB-conditioned diffusion U-Net
+- Uses precomputed CLIP RGB tokens via TokenConditionedMaskDataset
+- DDIM sampling with RGB conditioning
+- Saves binary predictions and side-by-side visualizations
 """
 
 import argparse
@@ -19,29 +26,23 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from data.dataset import SurgicalMaskRefinementDataset
-from data.transforms import build_transforms
+from data.token_dataset import TokenConditionedMaskDataset
 from models.diffusion import (
     FrozenVAELatentInterface,
     LatentDiffusionScheduler,
-    LatentDiffusionUNet,
+    RGBConditionedLatentDiffusionUNet,
 )
 from utils.metrics import dice_score, iou_score
 
 
 def parse_args():
-    """Parse command line arguments."""
-    parser = argparse.ArgumentParser(description="Run diffusion inference")
+    parser = argparse.ArgumentParser(description="Run RGB-conditioned latent diffusion inference")
     parser.add_argument("--config", type=str, required=True, help="Path to inference config YAML")
-    parser.add_argument("--vae_checkpoint", type=str, default=None, help="Path to VAE checkpoint (overrides config)")
-    parser.add_argument(
-        "--diffusion_checkpoint",
-        type=str,
-        default=None,
-        help="Path to diffusion checkpoint (overrides config)",
-    )
-    parser.add_argument("--output_dir", type=str, default=None, help="Output directory (overrides config)")
-    parser.add_argument("--metadata_dir", type=str, default="data/metadata", help="Dataset metadata directory")
+    parser.add_argument("--vae_checkpoint", type=str, default=None, help="Path to VAE checkpoint")
+    parser.add_argument("--diffusion_checkpoint", type=str, default=None, help="Path to diffusion checkpoint")
+    parser.add_argument("--output_dir", type=str, default=None, help="Output directory")
+    parser.add_argument("--metadata_dir", type=str, default=None, help="Metadata directory override")
+    parser.add_argument("--token_dir", type=str, default=None, help="Token directory override")
     parser.add_argument("--split", type=str, default="test", choices=["train", "val", "test"], help="Dataset split")
     parser.add_argument(
         "--source",
@@ -51,13 +52,9 @@ def parse_args():
         help="Dataset source",
     )
     parser.add_argument("--batch_size", type=int, default=None, help="Batch size override")
-    parser.add_argument("--augment_test", action="store_true", help="Apply stochastic augmentation on test set")
-    parser.add_argument(
-        "--num_visualizations",
-        type=int,
-        default=24,
-        help="Number of side-by-side visualizations to save",
-    )
+    parser.add_argument("--num_workers", type=int, default=2, help="Number of dataloader workers")
+    parser.add_argument("--num_visualizations", type=int, default=24, help="Number of visualizations to save")
+    parser.add_argument("--device", type=str, default=None, choices=["cuda", "cpu"], help="Device override")
     return parser.parse_args()
 
 
@@ -81,6 +78,17 @@ def _extract_model_state(checkpoint: Dict) -> Dict:
     return checkpoint
 
 
+def _strip_common_prefix(key: str) -> str:
+    for prefix in ("model.", "module."):
+        if key.startswith(prefix):
+            return key[len(prefix):]
+    return key
+
+
+def _clean_state_dict_for_model(state_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+    return {_strip_common_prefix(k): v for k, v in state_dict.items()}
+
+
 def _build_components(config: Dict, vae_ckpt: str, diff_ckpt: str, device: str):
     diffusion_cfg = _load_yaml(config["diffusion_config"])
 
@@ -88,15 +96,51 @@ def _build_components(config: Dict, vae_ckpt: str, diff_ckpt: str, device: str):
         model_config_path=config["vae_config"],
         checkpoint_path=vae_ckpt,
         device=device,
-        use_mu_only=True,
+        use_mu_only=config.get("vae", {}).get("use_mu_only", True),
     )
 
-    model = LatentDiffusionUNet(**diffusion_cfg["model"]).to(device)
+    model_cfg = diffusion_cfg["model"]
+    rgb_cfg = diffusion_cfg.get("rgb_condition", {})
+
+    model = RGBConditionedLatentDiffusionUNet(
+        in_channels=model_cfg["in_channels"],
+        out_channels=model_cfg["out_channels"],
+        base_channels=model_cfg["base_channels"],
+        channel_multipliers=model_cfg["channel_multipliers"],
+        num_res_blocks=model_cfg["num_res_blocks"],
+        time_embed_dim=model_cfg["time_embed_dim"],
+        norm=model_cfg.get("norm", "group"),
+        activation=model_cfg.get("activation", "silu"),
+        dropout=model_cfg.get("dropout", 0.0),
+        rgb_token_dim=rgb_cfg.get("token_dim", 768),
+        rgb_projected_dim=rgb_cfg.get("projected_dim", 256),
+        rgb_num_heads=rgb_cfg.get("num_heads", 4),
+    ).to(device)
+
     checkpoint = torch.load(diff_ckpt, map_location=device)
-    model.load_state_dict(_extract_model_state(checkpoint), strict=True)
+    raw_state = _extract_model_state(checkpoint)
+    clean_state = _clean_state_dict_for_model(raw_state)
+
+    incompatible = model.load_state_dict(clean_state, strict=False)
+    if incompatible.missing_keys:
+        raise RuntimeError(
+            "Failed to load RGB-conditioned diffusion checkpoint. "
+            f"Missing keys: {incompatible.missing_keys}"
+        )
+    if incompatible.unexpected_keys:
+        print(f"WARNING: Ignoring unexpected checkpoint keys: {incompatible.unexpected_keys}")
+
     model.eval()
 
-    scheduler = LatentDiffusionScheduler(**diffusion_cfg["scheduler"], device=device)
+    scheduler_cfg = diffusion_cfg["scheduler"]
+    scheduler = LatentDiffusionScheduler(
+        num_train_timesteps=scheduler_cfg["num_train_timesteps"],
+        beta_schedule=scheduler_cfg["beta_schedule"],
+        beta_start=scheduler_cfg["beta_start"],
+        beta_end=scheduler_cfg["beta_end"],
+        device=device,
+    )
+
     return vae_interface, model, scheduler
 
 
@@ -117,6 +161,7 @@ def _sample_refined_latent_ddim(
     model,
     scheduler,
     z_coarse: torch.Tensor,
+    rgb_tokens: torch.Tensor,
     num_inference_steps: int,
     eta: float,
 ) -> torch.Tensor:
@@ -125,7 +170,9 @@ def _sample_refined_latent_ddim(
 
     for idx, step in enumerate(ddim_steps):
         t = torch.full((z_t.shape[0],), step, device=z_t.device, dtype=torch.long)
-        eps_pred = model(z_t, t, z_coarse)
+
+        # RGB-conditioned prediction
+        eps_pred = model(z_t, t, z_coarse, rgb_tokens)
 
         alpha_bar_t = scheduler.alphas_cumprod[step]
         sqrt_alpha_bar_t = torch.sqrt(alpha_bar_t)
@@ -157,32 +204,52 @@ def _sample_refined_latent_ddim(
 
 def _save_sample_figure(rgb, coarse, pred, gt, out_path: Path, sample_id: str, dice: float, iou: float):
     fig, axes = plt.subplots(1, 4, figsize=(14, 4))
-    axes[0].imshow(rgb)
-    axes[0].set_title("RGB")
+
+    if rgb is not None:
+        axes[0].imshow(rgb)
+        axes[0].set_title("RGB")
+    else:
+        axes[0].axis("off")
+
     axes[1].imshow(coarse, cmap="gray", vmin=0, vmax=1)
     axes[1].set_title("Coarse")
+
     axes[2].imshow(pred, cmap="gray", vmin=0, vmax=1)
     axes[2].set_title(f"Prediction\nDice={dice:.4f}, IoU={iou:.4f}")
+
     axes[3].imshow(gt, cmap="gray", vmin=0, vmax=1)
     axes[3].set_title("GT Refined")
+
     for ax in axes:
         ax.axis("off")
+
     fig.suptitle(sample_id)
     fig.tight_layout()
     fig.savefig(out_path, dpi=150)
     plt.close(fig)
 
 
+def _to_vis_rgb(rgb_tensor: torch.Tensor) -> np.ndarray:
+    """
+    Convert tensor [3,H,W] to displayable RGB numpy array [H,W,3].
+    Assumes tensor is in [0,1] or close to it.
+    """
+    rgb_np = rgb_tensor.detach().cpu().permute(1, 2, 0).numpy()
+    rgb_np = np.clip(rgb_np, 0.0, 1.0)
+    return rgb_np
+
+
 def main():
     args = parse_args()
 
-    print("=" * 50)
-    print("Diffusion Inference")
-    print("=" * 50)
+    print("=" * 60)
+    print("RGB-CONDITIONED LATENT DIFFUSION INFERENCE")
+    print("=" * 60)
     print(f"Config: {args.config}")
 
     config = _load_yaml(args.config)
     inference_cfg = config.get("inference", {})
+
     vae_ckpt = args.vae_checkpoint or config["vae_checkpoint"]
     diff_ckpt = args.diffusion_checkpoint or config["diffusion_checkpoint"]
     output_dir = Path(args.output_dir or config["output"]["save_dir"])
@@ -190,32 +257,39 @@ def main():
     (output_dir / "predictions").mkdir(exist_ok=True)
     (output_dir / "visualizations").mkdir(exist_ok=True)
 
-    device = _resolve_device(config.get("device", "cuda"))
+    device = _resolve_device(args.device or config.get("device", "cuda"))
 
     vae_interface, model, scheduler = _build_components(config, vae_ckpt, diff_ckpt, device)
 
-    image_size = _load_yaml(config["vae_config"])["data"].get("image_size", 512)
-    use_aug = args.augment_test
-    transform = build_transforms(train=use_aug, augment=use_aug, image_size=image_size)
+    # Pull dataset settings from training config if present
+    data_cfg = config.get("data", {})
+    metadata_dir = args.metadata_dir or data_cfg.get("metadata_dir", "data/metadata")
+    token_dir = args.token_dir or data_cfg.get("token_dir", "outputs/clip_tokens")
+    image_size = data_cfg.get("image_size", 512)
+    strict_tokens = data_cfg.get("strict_tokens", True)
 
-    dataset = SurgicalMaskRefinementDataset(
-        metadata_dir=args.metadata_dir,
+    dataset = TokenConditionedMaskDataset(
+        metadata_dir=metadata_dir,
+        token_dir=token_dir,
         split=args.split,
         source=args.source,
-        load_images=True,
+        image_size=image_size,
+        load_spatial_map=False,
         return_paths=False,
-        apply_transforms=True,
-        transform=transform,
+        strict_tokens=strict_tokens,
+        transform=None,  # keep deterministic, matching validation/test style
     )
+
     loader = DataLoader(
         dataset,
         batch_size=args.batch_size or config.get("batch_size", 8),
         shuffle=False,
-        num_workers=2,
+        num_workers=args.num_workers,
         pin_memory=(device == "cuda"),
+        drop_last=False,
     )
 
-    threshold = config["postprocessing"].get("threshold", 0.5)
+    threshold = config.get("postprocessing", {}).get("threshold", 0.5)
     num_inference_steps = int(inference_cfg.get("num_inference_steps", 50))
     eta = float(inference_cfg.get("eta", 0.0))
 
@@ -224,19 +298,24 @@ def main():
     saved_visualizations = 0
 
     for batch in loader:
-        coarse_mask = batch["coarse_mask"].to(device)
-        refined_mask = batch["refined_mask"].to(device)
+        coarse_mask = batch["coarse_mask"].to(device)      # [B,1,512,512]
+        refined_mask = batch["refined_mask"].to(device)    # [B,1,512,512]
+        rgb_tokens = batch["rgb_tokens"].to(device)        # [B,196,768]
 
-        z_coarse = vae_interface.encode_coarse_mask(coarse_mask)
-        z_pred = _sample_refined_latent_ddim(
-            model=model,
-            scheduler=scheduler,
-            z_coarse=z_coarse,
-            num_inference_steps=num_inference_steps,
-            eta=eta,
-        )
-        pred_probs = vae_interface.decode_to_probs(z_pred)
-        pred_binary = (pred_probs > threshold).float()
+        with torch.no_grad():
+            z_coarse = vae_interface.encode_coarse_mask(coarse_mask)
+
+            z_pred = _sample_refined_latent_ddim(
+                model=model,
+                scheduler=scheduler,
+                z_coarse=z_coarse,
+                rgb_tokens=rgb_tokens,
+                num_inference_steps=num_inference_steps,
+                eta=eta,
+            )
+
+            pred_probs = vae_interface.decode_to_probs(z_pred)
+            pred_binary = (pred_probs > threshold).float()
 
         batch_dice = dice_score(pred_probs, refined_mask, threshold=threshold).detach().cpu().tolist()
         batch_iou = iou_score(pred_probs, refined_mask, threshold=threshold).detach().cpu().tolist()
@@ -245,18 +324,20 @@ def main():
 
         for i in range(pred_binary.shape[0]):
             sample_id = str(batch["id"][i])
+
             np_pred = (pred_binary[i, 0].detach().cpu().numpy() * 255).astype(np.uint8)
             out_path = output_dir / "predictions" / f"{sample_id}.png"
             Image.fromarray(np_pred).save(out_path)
 
             if saved_visualizations < args.num_visualizations:
-                rgb_np = batch["rgb"][i].permute(1, 2, 0).cpu().numpy()
-                coarse_np = batch["coarse_mask"][i, 0].cpu().numpy()
-                gt_np = batch["refined_mask"][i, 0].cpu().numpy()
+                # rgb_np = _to_vis_rgb(batch["rgb"][i])
+                coarse_np = batch["coarse_mask"][i, 0].detach().cpu().numpy()
+                gt_np = batch["refined_mask"][i, 0].detach().cpu().numpy()
                 pred_np = pred_binary[i, 0].detach().cpu().numpy()
+
                 vis_path = output_dir / "visualizations" / f"{sample_id}_comparison.png"
                 _save_sample_figure(
-                    rgb=rgb_np,
+                    rgb=None,
                     coarse=coarse_np,
                     pred=pred_np,
                     gt=gt_np,
@@ -271,7 +352,6 @@ def main():
         "split": args.split,
         "source": args.source,
         "num_samples": len(all_dice),
-        "augment_test": use_aug,
         "sampler": "ddim",
         "num_inference_steps": num_inference_steps,
         "eta": eta,
@@ -280,6 +360,7 @@ def main():
         "std_dice": float(np.std(all_dice)) if all_dice else 0.0,
         "std_iou": float(np.std(all_iou)) if all_iou else 0.0,
     }
+
     with open(output_dir / "metrics_summary.json", "w", encoding="utf-8") as f:
         json.dump(summary, f, indent=2)
 
