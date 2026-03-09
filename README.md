@@ -221,6 +221,51 @@ python3 scripts/train_rgb_conditioned_diffusion.py \
 
 ---
 
+### Step 4: Run Baseline Diffusion Inference (with optional test-time augmentation)
+
+```bash
+python3 scripts/infer_diffusion.py \
+    --config configs/infer/diffusion_infer.yaml \
+    --metadata_dir data/metadata \
+    --split test \
+    --source all \
+    --augment_test \
+    --batch_size 4 \
+    --num_visualizations 32 \
+    --vae_checkpoint checkpoints/vae_best.pt \
+    --diffusion_checkpoint outputs/diffusion/checkpoints/best.pt \
+    --output_dir outputs/inference_test_aug
+```
+
+Outputs:
+- Uses **DDIM sampling** controlled by `configs/infer/diffusion_infer.yaml` (`num_inference_steps`, `eta`)
+- `outputs/inference_test_aug/predictions/*.png`: predicted binary refined masks
+- `outputs/inference_test_aug/visualizations/*_comparison.png`: 4-panel RGB/coarse/prediction/GT figures
+- `outputs/inference_test_aug/metrics_summary.json`: aggregate Dice/IoU on the split
+
+> If you want deterministic inference without augmentation, remove `--augment_test`.
+
+---
+
+## Inference Visualization
+
+Each visualization image has 4 panels:
+1. RGB input
+2. coarse mask
+3. predicted refined mask (with per-sample Dice/IoU in title)
+4. refined ground truth
+
+You can quickly inspect a few examples with:
+
+```bash
+python3 - <<'PY'
+from pathlib import Path
+vis_dir = Path('outputs/inference_test_aug/visualizations')
+for p in sorted(vis_dir.glob('*_comparison.png'))[:10]:
+    print(p)
+PY
+```
+
 ## Monitoring Training
 
 ### Tmux Sessions
@@ -363,4 +408,3 @@ bash train_vae.sh
 wandb login
 # Paste API key
 ```
-

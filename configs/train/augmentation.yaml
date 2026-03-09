@@ -9,17 +9,17 @@ edge_blob_prob: 0.5
 drop_parts_prob: 0.4
 cutout_prob: 0.03
 
-erode_kernel_range: [3, 9]
-dilate_kernel_range: [3, 9]
+erode_kernel_range: [3, 15]
+dilate_kernel_range: [3, 15]
 
 erode_iter_range: [1, 2]
 dilate_iter_range: [1, 2]
 
 edge_blob_count_range: [1, 4]
-edge_blob_radius_range: [4, 16]
+edge_blob_radius_range: [4, 20]
 
 drop_parts_count_range: [1, 3]
-drop_parts_radius_range: [6, 18]
+drop_parts_radius_range: [6, 24]
 
 cutout_count_range: [1, 3]
 cutout_size_range: [8, 40]
