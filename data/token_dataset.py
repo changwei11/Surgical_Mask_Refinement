@@ -527,7 +527,7 @@ class TokenConditionedMaskDataset(Dataset):
                     token_record,
                     expected_source=source,
                     expected_file_stem=file_stem,
-                    expected_split=self.split
+                    expected_split=None  # Don't validate split (allows reusing tokens across splits)
                 )
         except (FileNotFoundError, ValueError) as e:
             if self.strict_tokens:

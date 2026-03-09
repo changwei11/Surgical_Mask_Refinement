@@ -1,0 +1,84 @@
+# RGB-Conditioned Latent Diffusion Hybrid Training Configuration
+# Hybrid training: ALL synthetic + real_world 0-1999 for train
+# Val/Test on remaining real_world data
+
+# Training hyperparameters
+train:
+  epochs: 500
+  batch_size: 16
+  num_workers: 4
+  learning_rate: 1.0e-4
+  weight_decay: 0.0
+  grad_clip_norm: 1.0
+  log_every_n_steps: 50
+  mixed_precision: false
+  seed: 42
+
+# Optimizer configuration
+optimizer:
+  type: "adamw"  # 'adam' or 'adamw'
+  betas: [0.9, 0.999]
+  eps: 1.0e-8
+
+# Learning rate scheduler (optional)
+scheduler:
+  use_scheduler: false
+  type: "cosine"  # 'cosine' or 'step'
+  eta_min: 0.0
+  step_size: 100
+  gamma: 0.1
+
+# Dataset configuration - HYBRID SPLIT
+data:
+  metadata_dir: "data/metadata"
+  token_dir: "outputs/clip_tokens"  # Precomputed CLIP tokens
+  split_train: "hybrid_train"  # ALL synthetic + real_world 0-1999
+  split_val: "hybrid_val"      # real_world 2000-5999
+  source: "all"  # Keep as 'all' to load both sources from hybrid split
+  image_size: 512
+  augment_train: false
+  strict_tokens: true  # Raise error if tokens missing
+
+# Frozen VAE configuration
+vae:
+  model_config: "configs/model/vae.yaml"
+  checkpoint: "outputs/vae/checkpoints/best.pt"
+  use_mu_only: true  # Deterministic encoding (z = mu)
+  freeze: true       # Keep VAE frozen (must be true)
+
+# RGB conditioning configuration
+rgb_condition:
+  token_dim: 768          # CLIP ViT-B/16 hidden dimension
+  projected_dim: 256      # Projected dimension for cross-attention
+  num_heads: 4           # Number of attention heads
+  load_spatial_map: false  # Load spatial feature maps if available
+
+# Checkpoint configuration
+checkpoint:
+  output_dir: "outputs/diffusion_rgb_hybrid"  # Separate output for hybrid training
+  save_best: true
+  save_latest: true
+  save_every_n_epochs: 50
+  save_epoch_checkpoints: true
+  monitor: "val/loss"
+  mode: "min"  # 'min' or 'max'
+
+# Evaluation configuration
+eval:
+  eval_every_n_epochs: 50
+  num_visualizations: 8
+  save_visualizations: true
+
+# Weights & Biases logging
+wandb:
+  use_wandb: true
+  project: "surgical-rgb-conditioned-diffusion"
+  run_name: null  # Set via CLI or leave as null for auto-generated name
+  mode: "online"  # 'online', 'offline', or 'disabled'
+  tags: ["hybrid-training", "rgb-conditioned", "synthetic+real_0-1999"]
+
+# Auxiliary losses
+auxiliary_losses:
+  use_perceptual_loss: true  # Enable perceptual loss
+  tooltip_loss_weight: 0.1  # Weight for ToolTipNet perceptual loss
+  sold2_loss_weight: 0.0  # Weight for SOLD2 perceptual loss
