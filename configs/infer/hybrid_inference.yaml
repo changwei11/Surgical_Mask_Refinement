@@ -1,0 +1,40 @@
+# Inference Configuration for Hybrid Model on Real-World Data >= 2000
+
+# Model checkpoints
+vae_checkpoint: "outputs/vae/checkpoints/best.pt"
+diffusion_checkpoint: "outputs/diffusion_rgb_hybrid/checkpoints/epoch_0500.pt"
+
+# Model configs
+vae_config: "configs/model/vae.yaml"
+diffusion_config: "configs/model/diffusion_rgb.yaml"
+
+# VAE settings
+vae:
+  use_mu_only: true
+
+# Inference settings
+inference:
+  num_inference_steps: 50  # DDIM steps
+  eta: 0.0  # DDIM eta parameter (0.0 = deterministic)
+  
+# Dataset configuration
+data:
+  metadata_dir: "data/metadata"
+  token_dir: "outputs/clip_tokens"
+  image_size: 512
+  strict_tokens: true
+
+# Output settings
+output:
+  save_dir: "outputs/inference/hybrid_real_world_ge2000"
+  save_format: "png"
+  
+# Postprocessing
+postprocessing:
+  threshold: 0.5
+  
+# Batch processing
+batch_size: 16
+
+# Device
+device: "cuda"
