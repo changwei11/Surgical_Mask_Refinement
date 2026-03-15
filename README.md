@@ -124,6 +124,7 @@ data/
 └── token_dataset.py    # Token-aware dataset
 
 models/
+├── baselies
 ├── vae/                # Mask VAE, frozen interface
 ├── rgb/                # CLIP tokenizer
 └── diffusion/          # Diffusion U-Net, scheduler, conditioner
@@ -136,6 +137,8 @@ trainers/
 scripts/
 ├── precompute_rgb_tokens.py            # Step 4
 ├── train_vae.py                        # Step 8
+├── train_cvae.py
+├── train_cgan.py
 ├── train_latent_diffusion.py           # Step 10 (baseline)
 └── train_rgb_conditioned_diffusion.py  # Step 12
 
@@ -219,20 +222,21 @@ python3 scripts/train_rgb_conditioned_diffusion.py \
 
 **Output:** `outputs/diffusion_rgb/checkpoints/best.pt`
 
-### Step 4: Train Baselines
-```
-python3 train_cvae.py --dataset_type real_world --epochs 500
-```
-```
-python3 train_cgan.py --dataset_type real_world --epochs 500
-```
-
 ---
 
 ### Step 4: Run Baseline Diffusion Inference (with optional test-time augmentation)
 
 ```bash
 python3 scripts/infer_diffusion.py --config configs/infer/diffusion_infer.yaml --split test --source all
+```
+
+
+### Step 5: Train Baselines
+```
+python3 train_cvae.py --dataset_type real_world --epochs 500
+```
+```
+python3 train_cgan.py --dataset_type real_world --epochs 500
 ```
 
 ---
