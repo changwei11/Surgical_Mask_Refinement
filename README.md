@@ -219,6 +219,14 @@ python3 scripts/train_rgb_conditioned_diffusion.py \
 
 **Output:** `outputs/diffusion_rgb/checkpoints/best.pt`
 
+### Step 4: Train Baselines
+```
+python3 train_cvae.py --dataset_type real_world --epochs 500
+```
+```
+python3 train_cgan.py --dataset_type real_world --epochs 500
+```
+
 ---
 
 ### Step 4: Run Baseline Diffusion Inference (with optional test-time augmentation)
